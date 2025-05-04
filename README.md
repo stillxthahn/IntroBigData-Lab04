@@ -42,12 +42,12 @@ docker ps -a
 ### 2. Transform
 - Write your code in `.\Transform\22127293_moving.py` and `.\Transform\22127293_moving.zscore`, save it and submit it to spark master container by running this command:
 ```bash
-.\Transform\spark_submit.bat <your python file name> 
+.\Transform\transform_spark_submit.bat <your python file name> 
 ```
 
 ### 3. Load
 - Write your code in `.\Load\22127293.py`, save it and submit it to spark master container by running this command:
 ```bash
-.\Transform\spark_submit.bat 22127293.py
+.\Load\load_spark_submit.bat 22127293.py
 ```
 <p>&copy; 2025</p>

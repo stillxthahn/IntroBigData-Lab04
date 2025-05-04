@@ -18,7 +18,9 @@ services:
     ports:
       - '8088:8080'
     volumes:
-      - ./Transform:/opt/spark-scripts
+      - ./Transform:/opt/spark-scripts-transform
+      - ./Load:/opt/spark-scripts-load
+
 
   spark-worker:
     image: docker.io/bitnami/spark:3.5
@@ -34,4 +36,5 @@ services:
       - SPARK_SSL_ENABLED=no
       - SPARK_USER=spark
     volumes:
-      - ./Transform:/opt/spark-scripts
+      - ./Transform:/opt/spark-scripts-transform
+      - ./Load:/opt/spark-scripts-load
