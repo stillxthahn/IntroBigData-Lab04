@@ -1,26 +1,26 @@
-@echo off
+@REM @echo off
 
-docker --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Docker is not installed. Please install Docker before running this script.
-    pause
-    exit /b
-)
+@REM docker --version >nul 2>&1
+@REM if %errorlevel% neq 0 (
+@REM     echo Docker is not installed. Please install Docker before running this script.
+@REM     pause
+@REM     exit /b
+@REM )
 
-echo "---Pulling Kafka image..."
-docker pull apache/kafka
-echo "------Kafka image pulled."
+@REM echo "---Pulling Kafka image..."
+@REM docker pull apache/kafka
+@REM echo "------Kafka image pulled."
 
-echo "---Starting Kafka container..."
-docker run -d -p 9092:9092 --name kafka apache/kafka:latest
-echo "------Kafka container started."
+@REM echo "---Starting Kafka container..."
+@REM docker run -d -p 9092:9092 --name kafka apache/kafka:latest
+@REM echo "------Kafka container started."
 
-echo "---Waiting for the container to start properly..."
-timeout /t 10 >nul
-echo "------Container should now be ready."
+@REM echo "---Waiting for the container to start properly..."
+@REM timeout /t 10 >nul
+@REM echo "------Container should now be ready."
 
 echo "---Entering Kafka container..."
-docker exec --workdir /opt/kafka/bin/ -it kafka sh
+docker exec --workdir /opt/kafka/bin/ -it kafka-broker sh
 echo "------Inside Kafka container."
 
 echo "---Creating Kafka topic: btc-price"
