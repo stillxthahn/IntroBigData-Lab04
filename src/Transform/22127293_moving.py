@@ -15,9 +15,11 @@ schema = StructType() \
     .add("timestamp", TimestampType())
 
 # Read data from Kafka
+
+# -------- THANH: CHANGE BOOSTRAP SERVER FROM 127.0.0.1 to container host name
 df = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "127.0.0.1:9092") \
+    .option("kafka.bootstrap.servers", "kafka-broker:9092") \
     .option("subscribe", "btc-price") \
     .option("startingOffsets", "latest") \
     .load()
