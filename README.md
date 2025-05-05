@@ -34,9 +34,9 @@ docker ps -a
 ## Steps 
 ### 1. Extract
 - Run `22127293.ipynb` to produces data into Kafka **btc-price** topic.
-> Optional: To see how data is produced, you can go back to `kafka_setup.bat` terminal and run
+> Optional: To see how data is produced, you can:
 ```bash
-./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic btc-price --from-beginning
+docker exec --workdir /opt/kafka/bin/ kafka-broker ./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic <your topic> --from-beginning
 ```
 
 ### 2. Transform

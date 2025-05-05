@@ -2,6 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, window, avg, stddev, to_json, struct, array, lit, current_timestamp
 from pyspark.sql.types import StructType, StringType, DoubleType, TimestampType, ArrayType
 import pyspark.sql.functions as F
+import os
 
 spark = SparkSession.builder \
     .appName("BTC Price Moving Stats") \
@@ -17,9 +18,11 @@ schema = StructType() \
 # Read data from Kafka
 
 # -------- THANH: CHANGE BOOSTRAP SERVER FROM 127.0.0.1 to container host name
+KAFKA_BROKER = os.environ.get("KAFKA_BROKER")
+
 df = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "kafka-broker:9092") \
+    .option("kafka.bootstrap.servers", f"{KAFKA_BROKER}:9092") \
     .option("subscribe", "btc-price") \
     .option("startingOffsets", "latest") \
     .load()
@@ -103,7 +106,7 @@ kafka_output_df = output_df.select(
 query = kafka_output_df.writeStream \
     .outputMode("update") \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "127.0.0.1:9092") \
+    .option("kafka.bootstrap.servers", f"{KAFKA_BROKER}:9092") \
     .option("topic", "btc-price-moving") \
     .option("checkpointLocation", "/tmp/checkpoint/moving") \
     .start()
