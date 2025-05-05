@@ -28,7 +28,6 @@ json_df = df.selectExpr("CAST(value AS STRING) as json_str") \
     .select(from_json(col("json_str"), schema).alias("data")) \
     .select("data.*")  
 
-
 # In ra terminal
 console_query = json_df.writeStream \
     .outputMode("append") \
