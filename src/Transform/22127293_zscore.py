@@ -1,129 +1,164 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, expr, when, to_json, struct, explode
-from pyspark.sql.types import StructType, StringType, DoubleType, TimestampType, ArrayType, StructField
+from pyspark.sql.functions import from_json, col, explode, to_json, struct, collect_list, lit, when
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType, ArrayType
+import os
+import logging
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Kafka broker configuration
+KAFKA_BROKER = "kafka-broker:9092"
+checkpoint_base = "/tmp/checkpoint"
+
+# Create Spark Session
 spark = SparkSession.builder \
     .appName("BTC Price Z-Score Calculator") \
+    .config("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", "false") \
+    .config("spark.sql.session.timeZone", "UTC") \
     .getOrCreate()
 
-# Define schema for the price data
-price_schema = StructType() \
-    .add("symbol", StringType()) \
-    .add("price", DoubleType()) \
-    .add("timestamp", TimestampType())
-
-# Define schema for the moving stats data
-window_stats_schema = StructType([
-    StructField("window", StringType()),
-    StructField("avg_price", DoubleType()),
-    StructField("std_price", DoubleType())
+# Define schema for price data
+price_schema = StructType([
+    StructField("symbol", StringType(), False),
+    StructField("price", StringType(), False),
+    StructField("timestamp", StringType(), False)
 ])
 
-moving_schema = StructType() \
-    .add("timestamp", TimestampType()) \
-    .add("symbol", StringType()) \
-    .add("windows", ArrayType(window_stats_schema))
+# Define schema for moving statistics data
+window_struct = StructType([
+    StructField("window", StringType(), False),
+    StructField("avg_price", DoubleType(), False),
+    StructField("std_price", DoubleType(), False)
+])
 
-# Read data from btc-price Kafka topic
+moving_stats_schema = StructType([
+    StructField("timestamp", TimestampType(), False),
+    StructField("symbol", StringType(), False),
+    StructField("windows", ArrayType(window_struct), False)
+])
 
-# -------- THANH: CHANGE BOOSTRAP SERVER FROM 127.0.0.1 to container host name
-df_price = spark.readStream \
+# Read streaming data from Kafka for price updates
+price_df = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "kafka-broker:9092") \
+    .option("kafka.bootstrap.servers", KAFKA_BROKER) \
     .option("subscribe", "btc-price") \
     .option("startingOffsets", "latest") \
+    .option("failOnDataLoss", "false") \
     .load()
 
-# Parse the price data JSON
-parsed_price_df = df_price.selectExpr("CAST(value AS STRING) as json") \
-    .select(from_json(col("json"), price_schema).alias("data")) \
-    .select("data.*")
-
-# Ensure price is treated as double
-parsed_price_df = parsed_price_df.withColumn("price", col("price").cast("double"))
-
-# Read data from btc-price-moving Kafka topic
-df_moving = spark.readStream \
+# Read streaming data from Kafka for moving statistics
+moving_stats_df = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "127.0.0.1:9092") \
+    .option("kafka.bootstrap.servers", KAFKA_BROKER) \
     .option("subscribe", "btc-price-moving") \
     .option("startingOffsets", "latest") \
+    .option("failOnDataLoss", "false") \
     .load()
 
-# Parse the moving stats data JSON
-parsed_moving_df = df_moving.selectExpr("CAST(value AS STRING) as json") \
-    .select(from_json(col("json"), moving_schema).alias("data")) \
-    .select("data.*")
+# Parse JSON data for price updates
+parsed_price_df = price_df.selectExpr("CAST(value AS STRING) as json_str") \
+    .withColumn("data", from_json(col("json_str"), price_schema)) \
+    .select("data.*") \
+    .withColumn("price", col("price").cast(DoubleType())) \
+    .withColumn("timestamp", col("timestamp").cast(TimestampType()))
 
-# Join the two streams based on timestamp and symbol
-# First, explode the windows array to have one row per window
-exploded_moving_df = parsed_moving_df \
-    .withWatermark("timestamp", "10 seconds") \
+# Parse JSON data for moving statistics
+parsed_moving_stats_df = moving_stats_df.selectExpr("CAST(value AS STRING) as json_str") \
+    .withColumn("data", from_json(col("json_str"), moving_stats_schema)) \
     .select(
-        col("timestamp"),
-        col("symbol"),
-        explode(col("windows")).alias("window_data")
-    ) \
-    .select(
-        col("timestamp"),
-        col("symbol"),
-        col("window_data.window").alias("window"),
-        col("window_data.avg_price").alias("avg_price"),
-        col("window_data.std_price").alias("std_price")
+        col("data.timestamp"),
+        col("data.symbol"),
+        col("data.windows")
     )
 
-# Join with a 10-second tolerance for late data
-joined_df = parsed_price_df \
-    .withWatermark("timestamp", "10 seconds") \
+# Watermarking to handle late data
+price_with_watermark = parsed_price_df.withWatermark("timestamp", "10 seconds")
+moving_stats_with_watermark = parsed_moving_stats_df.withWatermark("timestamp", "10 seconds")
+
+# Join the two streams based on timestamp and symbol
+joined_df = price_with_watermark \
     .join(
-        exploded_moving_df,
-        (parsed_price_df.timestamp == exploded_moving_df.timestamp) &
-        (parsed_price_df.symbol == exploded_moving_df.symbol),
+        moving_stats_with_watermark,
+        (price_with_watermark.timestamp == moving_stats_with_watermark.timestamp) & 
+        (price_with_watermark.symbol == moving_stats_with_watermark.symbol),
         "inner"
+    ) \
+    .select(
+        price_with_watermark.timestamp,
+        price_with_watermark.symbol,
+        price_with_watermark.price,
+        moving_stats_with_watermark.windows
+    )
+
+# Explode the windows array to process each window separately
+exploded_df = joined_df \
+    .select(
+        col("timestamp"),
+        col("symbol"),
+        col("price"),
+        explode(col("windows")).alias("window_data")
     )
 
 # Calculate Z-score for each window
-# Z-score = (price - avg_price) / std_price
-zscore_df = joined_df.select(
-    joined_df.timestamp,
-    joined_df.symbol,
-    joined_df.window,
-    joined_df.price,
-    joined_df.avg_price,
-    joined_df.std_price,
-    when(col("std_price") > 0, (col("price") - col("avg_price")) / col("std_price"))
-    .otherwise(0.0)
-    .alias("zscore_price")
-)
-
-# Group by timestamp and symbol to create the required JSON structure
-output_df = zscore_df \
-    .groupBy("timestamp", "symbol") \
-    .agg(
-        expr("collect_list(struct(window, zscore_price))").alias("windows")
+zscore_df = exploded_df \
+    .select(
+        col("timestamp"),
+        col("symbol"),
+        col("window_data.window"),
+        # Z-score = (price - avg) / std
+        # Handle division by zero by using a default value when std is zero
+        when(col("window_data.std_price") > 0, 
+             (col("price") - col("window_data.avg_price")) / col("window_data.std_price"))
+        .otherwise(lit(0.0)).alias("zscore_price")
     )
 
-# Convert to JSON for Kafka output
-kafka_output_df = output_df.select(
-    to_json(struct("timestamp", "symbol", "windows")).alias("value")
+# Group by timestamp and symbol to create the array structure for output
+grouped_zscore_df = zscore_df \
+    .groupBy("timestamp", "symbol") \
+    .agg(
+        collect_list(
+            struct(
+                col("window"),
+                col("zscore_price")
+            )
+        ).alias("windows")
+    )
+
+# Convert to JSON format for Kafka output
+output_df = grouped_zscore_df.select(
+    col("timestamp"),
+    col("symbol"),
+    col("windows"),
+    to_json(
+        struct(
+            col("timestamp"),
+            col("symbol"),
+            col("windows")
+        )
+    ).alias("value")
 )
 
-# Write to Kafka
-query = kafka_output_df.writeStream \
+# Write the output to Kafka
+kafka_query = output_df \
+    .select("value") \
+    .writeStream \
     .outputMode("append") \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "127.0.0.1:9092") \
+    .option("kafka.bootstrap.servers", KAFKA_BROKER) \
     .option("topic", "btc-price-zscore") \
-    .option("checkpointLocation", "/tmp/checkpoint/zscore") \
+    .option("checkpointLocation", f"{checkpoint_base}/zscore") \
     .start()
 
-# Also output to console for debugging
-console_query = output_df.writeStream \
+# Also write to console for debugging
+console_query = output_df \
+    .writeStream \
     .outputMode("append") \
     .format("console") \
     .option("truncate", False) \
     .start()
 
 # Wait for termination
-query.awaitTermination()
+spark.streams.awaitAnyTermination()
 
